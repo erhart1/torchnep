@@ -1402,7 +1402,7 @@ def train_nep_sharded(
                     swa_model.update_parameters(raw_model)
 
                 zero_acc = acc.new_zeros(())
-                acc += ok_f * torch.stack([
+                step_metrics = torch.stack([
                     m_le.to(acc.dtype) if m_le is not None else zero_acc,
                     m_lf.to(acc.dtype) if m_lf is not None else zero_acc,
                     m_lv.to(acc.dtype) if m_lv is not None else zero_acc,
@@ -1419,6 +1419,12 @@ def train_nep_sharded(
                     m_wlf.to(acc.dtype) if m_wlf is not None else zero_acc,
                     m_wlv.to(acc.dtype) if m_wlv is not None else zero_acc,
                 ])
+                if torch.is_tensor(ok_f):
+                    # a skipped step adds zero, also where its metrics are not
+                    # finite (ok_f * nan is nan, which would reach b1)
+                    step_metrics = torch.where(ok_f > 0, step_metrics,
+                                               torch.zeros_like(step_metrics))
+                acc += step_metrics
                 max_gn_t = torch.maximum(
                     max_gn_t, torch.nan_to_num(gn_t, 0.0, 0.0, 0.0))
 

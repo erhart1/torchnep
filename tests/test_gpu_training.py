@@ -121,3 +121,32 @@ def test_compiled_ddp_training_matches_eager(tmp_path, setup):
         assert r.returncode == 0, r.stderr[-3000:]
     assert "torch.compile: enabled" in (tmp_path / "compiled" / "output.log").read_text()
     _compare(tmp_path / "eager", tmp_path / "compiled", "float32")
+
+
+def test_a_skipped_step_leaves_the_run_finite(tmp_path, monkeypatch):
+    """A step whose energies are not finite is skipped on the GPU (fused Adam
+    with found_inf), and the epoch sums, from which the energy offset b1 is
+    solved, take no NaN from it: the run continues with finite losses."""
+    from torchnep.model import NEPModel
+    compute = NEPModel.compute_properties_cached
+    calls = {"n": 0}
+
+    def poisoned(self, *args, **kwargs):
+        result = compute(self, *args, **kwargs)
+        if torch.is_grad_enabled():
+            calls["n"] += 1
+            if calls["n"] == 2:
+                result["Etot"] = result["Etot"] * float("nan")
+        return result
+
+    monkeypatch.setattr(NEPModel, "compute_properties_cached", poisoned)
+    p = tmp_path / "nep.in"
+    p.write_text(BASE.replace("stage2 1\n", "") + "cutoff 6 4\n")
+    train_nep(str(p), str(XYZ), output_dir=str(tmp_path / "out"), device="cuda",
+              precision="float32", use_compile=False, restart=False, run_seed=0,
+              print_interval=1, checkpoint_interval=10**6, prediction_interval=10**6)
+    assert calls["n"] > 2
+    loss = np.loadtxt(tmp_path / "out" / "loss.out", ndmin=2)
+    assert np.isfinite(loss[:, 1:4]).all(), loss[:, :4]
+    assert "nan" not in (tmp_path / "out" / "nep_final.txt").read_text().lower()
+    assert "1 step(s) skipped" in (tmp_path / "out" / "output.log").read_text()
