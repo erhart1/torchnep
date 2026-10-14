@@ -2689,7 +2689,6 @@ def train_nep(
                     optimizer.found_inf = bad.to(torch.float32)
                     optimizer.step()
                     n_bad_t += bad
-                    ok_f = (1.0 - bad).to(torch.float64)
                 else:
                     gn = float(gn_t)
                     if not np.isfinite(gn):
@@ -2697,7 +2696,6 @@ def train_nep(
                         n_bad_t += 1
                         continue
                     optimizer.step()
-                    ok_f = 1.0
 
                 if (in_stage2 and swa_model is not None
                         and epoch >= swa_start):
@@ -2724,11 +2722,9 @@ def train_nep(
                     m_wlf.to(acc.dtype) if m_wlf is not None else zero_acc,
                     m_wlv.to(acc.dtype) if m_wlv is not None else zero_acc,
                 ])
-                if torch.is_tensor(ok_f):
-                    # a skipped step adds zero, also where its metrics are not
-                    # finite (ok_f * nan is nan, which would reach b1)
-                    step_metrics = torch.where(ok_f > 0, step_metrics,
-                                               torch.zeros_like(step_metrics))
+                if async_guard:
+                    # a skipped step adds zero, also for non-finite metrics
+                    step_metrics = step_metrics.masked_fill(bad.bool(), 0.0)
                 acc += step_metrics
                 max_gn_t = torch.maximum(
                     max_gn_t, torch.nan_to_num(gn_t, 0.0, 0.0, 0.0))
